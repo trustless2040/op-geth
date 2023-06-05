@@ -342,12 +342,7 @@ func (b *Block) ReceiptHash() common.Hash { return b.header.ReceiptHash }
 func (b *Block) UncleHash() common.Hash   { return b.header.UncleHash }
 func (b *Block) Extra() []byte            { return common.CopyBytes(b.header.Extra) }
 
-const basefee = 10 * 1e9
-
 func (b *Block) BaseFee() *big.Int {
-	if b.header.BaseFee == nil {
-		return new(big.Int).SetInt64(basefee)
-	}
 	return new(big.Int).Set(b.header.BaseFee)
 }
 
