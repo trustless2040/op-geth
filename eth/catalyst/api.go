@@ -334,6 +334,36 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		}
 		// Set the safe block
 		api.eth.BlockChain().SetSafe(safeBlock.Header())
+
+		//if not a block generated request, update fee usage
+		if payloadAttributes == nil {
+			//TODO: using LRU to check if we send commit fee already or not
+			//If not, then send commit fee
+			fmt.Println("==============================> commit fee usage", safeBlock.Header().Number)
+			for _, tx := range safeBlock.Transactions() {
+				switch tx.Type() {
+				case types.AccessListTxType:
+				case types.DynamicFeeTxType:
+					fmt.Println("=========================== commit DynamicFeeTxType", safeBlock.NumberU64())
+				case types.LegacyTxType:
+				case types.DepositTxType:
+				}
+			}
+
+			//TODO: using LRU to check if we send deducting fee already or not
+			//If not, then send deducting fee
+			fmt.Println("==============================> update fee usage", block.Header().Number)
+			for _, tx := range block.Transactions() {
+				switch tx.Type() {
+				case types.AccessListTxType:
+				case types.DynamicFeeTxType:
+					fmt.Println("=========================== update DynamicFeeTxType", block.NumberU64())
+				case types.LegacyTxType:
+				case types.DepositTxType:
+				}
+			}
+		}
+
 	}
 	// If payload generation was requested, create a new block to be potentially
 	// sealed by the beacon client. The payload will be requested later, and we

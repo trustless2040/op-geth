@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/rlp"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -1069,6 +1070,30 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	return env, nil
 }
 
+func checkEnoughBtc(addr common.Address, txs []*types.Transaction) (pass []*types.Transaction, notPass []*types.Transaction) {
+	return txs, nil
+	//TODO: use cache
+	//TODO: get balance of the address
+	balance := 0
+	for _, tx := range txs {
+		if balance <= 0 {
+			notPass = append(notPass, tx)
+			continue
+		}
+		txBytes, _ := rlp.EncodeToBytes(&tx)
+		//estimate btc fee and deduct fee from balance
+		fee := len(txBytes) //TODO: use real fee
+		balance -= fee
+		//if fee is below 0
+		if balance < 0 {
+			notPass = append(notPass, tx)
+		} else {
+			pass = append(pass, tx)
+		}
+	}
+	return pass, notPass
+}
+
 // fillTransactions retrieves the pending transactions from the txpool and fills them
 // into the given sealing block. The transaction selection and ordering strategy can
 // be customized with the plugin in the future.
@@ -1076,6 +1101,10 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	// Split the pending transactions into locals and remotes
 	// Fill the block with all available pending transactions.
 	pending := w.eth.TxPool().Pending(true)
+	for address, txs := range pending {
+		valid, _ := checkEnoughBtc(address, txs)
+		pending[address] = valid
+	}
 	localTxs, remoteTxs := make(map[common.Address]types.Transactions), pending
 	for _, account := range w.eth.TxPool().Locals() {
 		if txs := remoteTxs[account]; len(txs) > 0 {
@@ -1109,6 +1138,7 @@ func (w *worker) generateWork(genParams *generateParams) (*types.Block, *big.Int
 		work.gasPool = new(core.GasPool).AddGas(work.header.GasLimit)
 	}
 
+	//Commit transaction from api
 	for _, tx := range genParams.txs {
 		from, _ := types.Sender(work.signer, tx)
 		work.state.SetTxContext(tx.Hash(), work.tcount)

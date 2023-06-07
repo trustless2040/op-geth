@@ -19,7 +19,6 @@ package txpool
 import (
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/rlp"
 	"math"
 	"math/big"
 	"sort"
@@ -1437,29 +1436,6 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 	pool.shanghai.Store(pool.chainconfig.IsShanghai(uint64(time.Now().Unix())))
 }
 
-func (pool *TxPool) checkEnoughBtc(addr common.Address, txs []*types.Transaction) (pass []*types.Transaction, notPass []*types.Transaction) {
-	//TODO: use cache
-	//TODO: get balance of the address
-	balance := 0
-	for _, tx := range txs {
-		if balance <= 0 {
-			notPass = append(notPass, tx)
-			continue
-		}
-		txBytes, _ := rlp.EncodeToBytes(&tx)
-		//estimate btc fee and deduct fee from balance
-		fee := len(txBytes) //TODO: use real fee
-		balance -= fee
-		//if fee is below 0
-		if balance < 0 {
-			notPass = append(notPass, tx)
-		} else {
-			pass = append(pass, tx)
-		}
-	}
-	return pass, notPass
-}
-
 // promoteExecutables moves transactions that have become processable from the
 // future queue to the set of pending transactions. During this process, all
 // invalidated transactions (low nonce, low balance) are deleted.
@@ -1499,11 +1475,6 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 
 		// Gather all executable transactions and promote them
 		readies := list.Ready(pool.pendingNonces.get(addr))
-		validTxs, invalidTxs := pool.checkEnoughBtc(addr, readies)
-		readies = validTxs
-		for _, tx := range invalidTxs {
-			list.Add(tx, pool.config.PriceBump)
-		}
 
 		for _, tx := range readies {
 			hash := tx.Hash()
