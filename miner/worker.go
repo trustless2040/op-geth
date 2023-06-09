@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/bitcoinbalance"
 	"github.com/ethereum/go-ethereum/rlp"
 	"math/big"
 	"sync"
@@ -1070,26 +1071,27 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	return env, nil
 }
 
-func checkEnoughBtc(addr common.Address, txs []*types.Transaction) (pass []*types.Transaction, notPass []*types.Transaction) {
-	return txs, nil
-	//TODO: use cache
-	//TODO: get balance of the address
-	balance := 0
+func checkEnoughBtc(balanceMap map[string]int64, txs []*types.Transaction, signer types.Signer) (pass map[common.Address]types.Transactions, notPass map[common.Address]types.Transactions) {
+	pass = map[common.Address]types.Transactions{}
+	notPass = map[common.Address]types.Transactions{}
 	for _, tx := range txs {
+		from, _ := types.Sender(signer, tx)
+		balance := balanceMap[from.String()]
 		if balance <= 0 {
-			notPass = append(notPass, tx)
+			notPass[from] = append(notPass[from], tx)
 			continue
 		}
 		txBytes, _ := rlp.EncodeToBytes(&tx)
 		//estimate btc fee and deduct fee from balance
 		fee := len(txBytes) //TODO: use real fee
-		balance -= fee
+		balance -= int64(fee)
 		//if fee is below 0
 		if balance < 0 {
-			notPass = append(notPass, tx)
+			notPass[from] = append(notPass[from], tx)
 		} else {
-			pass = append(pass, tx)
+			pass[from] = append(pass[from], tx)
 		}
+		balanceMap[from.String()] = balance
 	}
 	return pass, notPass
 }
@@ -1101,10 +1103,30 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 	// Split the pending transactions into locals and remotes
 	// Fill the block with all available pending transactions.
 	pending := w.eth.TxPool().Pending(true)
-	for address, txs := range pending {
-		valid, _ := checkEnoughBtc(address, txs)
-		pending[address] = valid
+	addressArray := []common.Address{}
+	btcChecker := bitcoinbalance.GetBitcoinBalanceModule()
+	if btcChecker == nil {
+		log.Error("Balance checker is not set")
+		return nil
 	}
+	allTxs := []*types.Transaction{}
+	for address, tx := range pending {
+		addressArray = append(addressArray, address)
+		allTxs = append(allTxs, tx...)
+	}
+	balanceMap, err := btcChecker.GetBalance(addressArray)
+	if err != nil {
+		log.Error("Failed to get balance", "err", err)
+		return nil
+	}
+	passTx, notPass := checkEnoughBtc(balanceMap, allTxs, env.signer)
+	for _, txs := range notPass {
+		for _, tx := range txs {
+			log.Error("Not enough btc balance", "txhash", tx.Hash().String())
+		}
+	}
+	pending = passTx
+
 	localTxs, remoteTxs := make(map[common.Address]types.Transactions), pending
 	for _, account := range w.eth.TxPool().Locals() {
 		if txs := remoteTxs[account]; len(txs) > 0 {

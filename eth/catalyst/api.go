@@ -20,6 +20,9 @@ package catalyst
 import (
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/bitcoinbalance"
+	"github.com/ethereum/go-ethereum/common/lru"
+	"github.com/ethereum/go-ethereum/rlp"
 	"sync"
 	"time"
 
@@ -202,6 +205,8 @@ func (api *ConsensusAPI) verifyPayloadAttributes(attr *engine.PayloadAttributes)
 	return nil
 }
 
+var deductRequestCache = lru.NewCache[string, bool](1000)
+
 func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payloadAttributes *engine.PayloadAttributes) (engine.ForkChoiceResponse, error) {
 	api.forkchoiceLock.Lock()
 	defer api.forkchoiceLock.Unlock()
@@ -337,33 +342,68 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 
 		//if not a block generated request, update fee usage
 		if payloadAttributes == nil {
-			//TODO: using LRU to check if we send commit fee already or not
-			//If not, then send commit fee
-			fmt.Println("==============================> commit fee usage", safeBlock.Header().Number)
-			for _, tx := range safeBlock.Transactions() {
-				switch tx.Type() {
-				case types.AccessListTxType:
-				case types.DynamicFeeTxType:
-					fmt.Println("=========================== commit DynamicFeeTxType", safeBlock.NumberU64())
-				case types.LegacyTxType:
-				case types.DepositTxType:
+			module := bitcoinbalance.GetBitcoinBalanceModule()
+			if _, ok := deductRequestCache.Get("final" + safeBlock.Hash().String()); !ok {
+				addr := []common.Address{}
+				amounts := []string{}
+				txIDs := []string{}
+				batch := "batch1111"
+				for _, tx := range safeBlock.Transactions() {
+					switch tx.Type() {
+					case types.AccessListTxType:
+					case types.DynamicFeeTxType:
+						signer := types.MakeSigner(api.eth.BlockChain().Config(), block.Number())
+						from, _ := types.Sender(signer, tx)
+						addr = append(addr, from)
+						amt := "1111"
+						amounts = append(amounts, amt)
+						txIDs = append(txIDs, tx.Hash().String())
+						log.Info("Deduct final fee", "account", from.String(), "amount", amt, "txID", tx.Hash().String())
+					case types.LegacyTxType:
+					case types.DepositTxType:
+					}
 				}
+				if len(addr) > 0 {
+					err := module.DeductBalance(addr, amounts, txIDs, batch)
+					if err != nil {
+						fmt.Println("=========================== DeductBalance err", err)
+						return engine.STATUS_INVALID, engine.InvalidForkChoiceState.With(errors.New("DeductBalance err"))
+					}
+				}
+				deductRequestCache.Add("final"+safeBlock.Hash().String(), true)
 			}
 
-			//TODO: using LRU to check if we send deducting fee already or not
-			//If not, then send deducting fee
-			fmt.Println("==============================> update fee usage", block.Header().Number)
-			for _, tx := range block.Transactions() {
-				switch tx.Type() {
-				case types.AccessListTxType:
-				case types.DynamicFeeTxType:
-					fmt.Println("=========================== update DynamicFeeTxType", block.NumberU64())
-				case types.LegacyTxType:
-				case types.DepositTxType:
+			if _, ok := deductRequestCache.Get("estimate" + block.Hash().String()); !ok {
+				addr := []common.Address{}
+				amounts := []string{}
+				txIDs := []string{}
+				batch := "batch1111"
+				for _, tx := range block.Transactions() {
+					switch tx.Type() {
+					case types.AccessListTxType:
+					case types.DynamicFeeTxType:
+						signer := types.MakeSigner(api.eth.BlockChain().Config(), block.Number())
+						from, _ := types.Sender(signer, tx)
+						addr = append(addr, from)
+						txBytes, _ := rlp.EncodeToBytes(&tx)
+						amt := fmt.Sprintf("%s", common.EstimateFeeUsage(uint64(len(txBytes))))
+						amounts = append(amounts, amt)
+						txIDs = append(txIDs, tx.Hash().String())
+						log.Info("Deduct estimate fee", "account", from.String(), "amount", amt, "txID", tx.Hash().String())
+					case types.LegacyTxType:
+					case types.DepositTxType:
+					}
 				}
+				if len(addr) > 0 {
+					err := module.DeductBalance(addr, amounts, txIDs, batch)
+					if err != nil {
+						fmt.Println("=========================== DeductBalance err", err)
+						return engine.STATUS_INVALID, engine.InvalidForkChoiceState.With(errors.New("DeductBalance err"))
+					}
+				}
+				deductRequestCache.Add("estimate"+block.Hash().String(), true)
 			}
 		}
-
 	}
 	// If payload generation was requested, create a new block to be potentially
 	// sealed by the beacon client. The payload will be requested later, and we

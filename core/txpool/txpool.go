@@ -19,6 +19,7 @@ package txpool
 import (
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/bitcoinbalance"
 	"math"
 	"math/big"
 	"sort"
@@ -734,6 +735,18 @@ func (pool *TxPool) add(tx *types.Transaction, local bool) (replaced bool, err e
 
 	// already validated by this point
 	from, _ := types.Sender(pool.signer, tx)
+	btcChecker := bitcoinbalance.GetBitcoinBalanceModule()
+	if btcChecker != nil {
+		from, _ := types.Sender(pool.signer, tx)
+		balanceMap, err := btcChecker.GetBalance([]common.Address{from})
+		if err != nil {
+			return false, fmt.Errorf("Cannot get btc balance of %v", from.String())
+		}
+		//TODO: make sure the balance is enough
+		if balance := balanceMap[from.String()]; balance <= 0 {
+			return false, fmt.Errorf("Account dont have enough balance %v : %v", from.String(), balance)
+		}
+	}
 
 	// If the transaction pool is full, discard underpriced transactions
 	if uint64(pool.all.Slots()+numSlots(tx)) > pool.config.GlobalSlots+pool.config.GlobalQueue {
