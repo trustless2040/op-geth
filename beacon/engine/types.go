@@ -28,6 +28,14 @@ import (
 
 //go:generate go run github.com/fjl/gencodec -type PayloadAttributes -field-override payloadAttributesMarshaling -out gen_blockparams.go
 
+type InclusionPayloadAttrInfo struct {
+	L1TxID       string  `json:"l1TxId"`
+	BTCTxId      string  `json:"btcTxId"`
+	BTCFeeRate   float64 `json:"btcFeeRate"`
+	BTCTotalFee  int64   `json:"btcTotalFee"`
+	BTCBlockTime uint64  `json:"btcBlockTime"`
+}
+
 // PayloadAttributes describes the environment context in which a block should
 // be built.
 type PayloadAttributes struct {
@@ -43,6 +51,8 @@ type PayloadAttributes struct {
 	NoTxPool bool `json:"noTxPool,omitempty" gencodec:"optional"`
 	// GasLimit is a field for rollups: if set, this sets the exact gas limit the block produced with.
 	GasLimit *uint64 `json:"gasLimit,omitempty" gencodec:"optional"`
+	// Bacth Bitcoin tx for this payload
+	BTCBatchInfo InclusionPayloadAttrInfo `json:"btcBatchInfo,omitempty"`
 }
 
 // JSON type overrides for PayloadAttributes.

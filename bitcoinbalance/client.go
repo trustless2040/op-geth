@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/ethereum/go-ethereum/beacon/engine"
 	"github.com/ethereum/go-ethereum/common"
 	"io/ioutil"
 	"net/http"
@@ -114,19 +115,50 @@ func (m *BtcBalanceModule) GetBalance(address []common.Address) (map[string]int6
 	return returnRes, nil
 }
 
-func (m *BtcBalanceModule) DeductBalance(address []common.Address, amount []string, txID []string, batchTx string) error {
+func (m *BtcBalanceModule) DeductBalance(address []common.Address, amount []uint64, txID []string, size []uint64, blockNumber uint64) error {
 	type Payload struct {
 		Tc_address string `json:"tc_address"`
-		Amount     string `json:"amount"`
+		Amount     uint64 `json:"amount"`
 		TX_ID      string `json:"tx_id"`
-		BATCH_TX   string `json:"batch_tx"`
+		Size       uint64 `json:"size"`
+		L2BlockNum uint64 `json:"l2_block_num"`
 	}
-
 	payloadArr := []Payload{}
 	for i, addr := range address {
-		payloadArr = append(payloadArr, Payload{addr.String(), amount[i], txID[i], batchTx})
+		payloadArr = append(payloadArr, Payload{addr.String(), amount[i], txID[i], size[i], blockNumber})
 	}
 	response, err := m.post("/api/deduct", payloadArr)
+	if err != nil {
+		return err
+	}
+
+	result := map[string]string{}
+	json.Unmarshal(response, &result)
+	if result["result"] != "ok" {
+		return fmt.Errorf("deduct balance failed")
+	}
+	return nil
+}
+
+type TxFeeAmount struct {
+	TxID   string `json:"tx_id"`
+	Amount uint64 `json:"amount"`
+}
+
+func (m *BtcBalanceModule) CommitBalance(txID []string, amount []uint64, info engine.InclusionPayloadAttrInfo) error {
+	type Payload struct {
+		TxList      []TxFeeAmount `json:"tx_list"`
+		Batch_l1_tx string        `json:"batch_tx"`
+		Btc_tx      string        `json:"btc_tx"`
+		Btc_time    uint64        `json:"btc_time"`
+		Btc_feerate float64       `json:"btc_fee_rate"`
+		Btc_fee     int64         `json:"btc_fee"`
+	}
+	payloadArr := []TxFeeAmount{}
+	for i, _ := range txID {
+		payloadArr = append(payloadArr, TxFeeAmount{txID[i], amount[i]})
+	}
+	response, err := m.post("/api/commit", Payload{payloadArr, info.L1TxID, info.BTCTxId, info.BTCBlockTime, info.BTCFeeRate, info.BTCTotalFee})
 	if err != nil {
 		return err
 	}

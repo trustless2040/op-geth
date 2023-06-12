@@ -21,7 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/bitcoinbalance"
-	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/eth/catalyst"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -1071,7 +1071,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	return env, nil
 }
 
-func checkEnoughBtc(balanceMap map[string]int64, txs []*types.Transaction, signer types.Signer) (pass map[common.Address]types.Transactions, notPass map[common.Address]types.Transactions) {
+func checkEnoughBtc(blockNumber uint64, balanceMap map[string]int64, txs []*types.Transaction, signer types.Signer) (pass map[common.Address]types.Transactions, notPass map[common.Address]types.Transactions) {
 	pass = map[common.Address]types.Transactions{}
 	notPass = map[common.Address]types.Transactions{}
 	for _, tx := range txs {
@@ -1081,9 +1081,7 @@ func checkEnoughBtc(balanceMap map[string]int64, txs []*types.Transaction, signe
 			notPass[from] = append(notPass[from], tx)
 			continue
 		}
-		txBytes, _ := rlp.EncodeToBytes(&tx)
-		//estimate btc fee and deduct fee from balance
-		fee := len(txBytes) //TODO: use real fee
+		fee := catalyst.GetFeeRateByBlockHeight(blockNumber, tx.Size(), -1)
 		balance -= int64(fee)
 		//if fee is below 0
 		if balance < 0 {
@@ -1119,7 +1117,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		log.Error("Failed to get balance", "err", err)
 		return nil
 	}
-	passTx, notPass := checkEnoughBtc(balanceMap, allTxs, env.signer)
+
+	passTx, notPass := checkEnoughBtc(w.chain.CurrentBlock().Number.Uint64(), balanceMap, allTxs, env.signer)
 	for _, txs := range notPass {
 		for _, tx := range txs {
 			log.Error("Not enough btc balance", "txhash", tx.Hash().String())

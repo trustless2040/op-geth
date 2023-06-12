@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/bitcoinbalance"
 	"github.com/ethereum/go-ethereum/common/lru"
-	"github.com/ethereum/go-ethereum/rlp"
 	"sync"
 	"time"
 
@@ -207,6 +206,17 @@ func (api *ConsensusAPI) verifyPayloadAttributes(attr *engine.PayloadAttributes)
 
 var deductRequestCache = lru.NewCache[string, bool](1000)
 
+func GetFeeRateByBlockHeight(blockHeight uint64, size uint64, feeRate float64) uint64 {
+	if feeRate <= 0 {
+		feeRate = 50
+	}
+	if blockHeight > 0 {
+		fee := uint64(float64(size/4) * feeRate)
+		return fee
+	}
+	return 0
+}
+
 func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payloadAttributes *engine.PayloadAttributes) (engine.ForkChoiceResponse, error) {
 	api.forkchoiceLock.Lock()
 	defer api.forkchoiceLock.Unlock()
@@ -344,10 +354,15 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		if payloadAttributes == nil {
 			module := bitcoinbalance.GetBitcoinBalanceModule()
 			if _, ok := deductRequestCache.Get("final" + safeBlock.Hash().String()); !ok {
+				if payloadAttributes.BTCBatchInfo.BTCTxId == "" {
+					log.Error("BTCTxId is empty")
+					return engine.STATUS_SYNCING, nil
+				}
 				addr := []common.Address{}
-				amounts := []string{}
+				amounts := []uint64{}
 				txIDs := []string{}
-				batch := "batch1111"
+				size := []uint64{}
+
 				for _, tx := range safeBlock.Transactions() {
 					switch tx.Type() {
 					case types.AccessListTxType:
@@ -355,19 +370,20 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 						signer := types.MakeSigner(api.eth.BlockChain().Config(), block.Number())
 						from, _ := types.Sender(signer, tx)
 						addr = append(addr, from)
-						amt := "1111"
+						amt := GetFeeRateByBlockHeight(safeBlock.NumberU64(), tx.Size(), payloadAttributes.BTCBatchInfo.BTCFeeRate)
 						amounts = append(amounts, amt)
 						txIDs = append(txIDs, tx.Hash().String())
+						size = append(size, tx.Size())
 						log.Info("Deduct final fee", "account", from.String(), "amount", amt, "txID", tx.Hash().String())
 					case types.LegacyTxType:
 					case types.DepositTxType:
 					}
 				}
 				if len(addr) > 0 {
-					err := module.DeductBalance(addr, amounts, txIDs, batch)
+					err := module.CommitBalance(txIDs, amounts, payloadAttributes.BTCBatchInfo)
 					if err != nil {
 						fmt.Println("=========================== DeductBalance err", err)
-						return engine.STATUS_INVALID, engine.InvalidForkChoiceState.With(errors.New("DeductBalance err"))
+						return engine.STATUS_SYNCING, nil
 					}
 				}
 				deductRequestCache.Add("final"+safeBlock.Hash().String(), true)
@@ -375,9 +391,9 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 
 			if _, ok := deductRequestCache.Get("estimate" + block.Hash().String()); !ok {
 				addr := []common.Address{}
-				amounts := []string{}
+				amounts := []uint64{}
+				size := []uint64{}
 				txIDs := []string{}
-				batch := "batch1111"
 				for _, tx := range block.Transactions() {
 					switch tx.Type() {
 					case types.AccessListTxType:
@@ -385,8 +401,8 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 						signer := types.MakeSigner(api.eth.BlockChain().Config(), block.Number())
 						from, _ := types.Sender(signer, tx)
 						addr = append(addr, from)
-						txBytes, _ := rlp.EncodeToBytes(&tx)
-						amt := fmt.Sprintf("%s", common.EstimateFeeUsage(uint64(len(txBytes))))
+						size = append(size, tx.Size())
+						amt := GetFeeRateByBlockHeight(safeBlock.NumberU64(), tx.Size(), -1)
 						amounts = append(amounts, amt)
 						txIDs = append(txIDs, tx.Hash().String())
 						log.Info("Deduct estimate fee", "account", from.String(), "amount", amt, "txID", tx.Hash().String())
@@ -395,10 +411,10 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 					}
 				}
 				if len(addr) > 0 {
-					err := module.DeductBalance(addr, amounts, txIDs, batch)
+					err := module.DeductBalance(addr, amounts, txIDs, size, block.Header().Number.Uint64())
 					if err != nil {
 						fmt.Println("=========================== DeductBalance err", err)
-						return engine.STATUS_INVALID, engine.InvalidForkChoiceState.With(errors.New("DeductBalance err"))
+						return engine.STATUS_SYNCING, nil
 					}
 				}
 				deductRequestCache.Add("estimate"+block.Hash().String(), true)
