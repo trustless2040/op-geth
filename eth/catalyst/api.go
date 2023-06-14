@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/bitcoinbalance"
 	"github.com/ethereum/go-ethereum/common/lru"
+	"github.com/ethereum/go-ethereum/eth"
 	"sync"
 	"time"
 
@@ -30,7 +31,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
@@ -206,17 +206,6 @@ func (api *ConsensusAPI) verifyPayloadAttributes(attr *engine.PayloadAttributes)
 
 var deductRequestCache = lru.NewCache[string, bool](1000)
 
-func GetFeeRateByBlockHeight(blockHeight uint64, size uint64, feeRate float64) uint64 {
-	if feeRate <= 0 {
-		feeRate = 50
-	}
-	if blockHeight > 0 {
-		fee := uint64(float64(size/4) * feeRate)
-		return fee
-	}
-	return 0
-}
-
 func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payloadAttributes *engine.PayloadAttributes) (engine.ForkChoiceResponse, error) {
 	api.forkchoiceLock.Lock()
 	defer api.forkchoiceLock.Unlock()
@@ -353,40 +342,42 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 		//if not a block generated request, update fee usage
 		if payloadAttributes == nil {
 			module := bitcoinbalance.GetBitcoinBalanceModule()
-			if _, ok := deductRequestCache.Get("final" + safeBlock.Hash().String()); !ok {
-				if payloadAttributes.BTCBatchInfo.BTCTxId == "" {
-					log.Error("BTCTxId is empty")
-					return engine.STATUS_SYNCING, nil
-				}
-				addr := []common.Address{}
-				amounts := []uint64{}
-				txIDs := []string{}
-				size := []uint64{}
-
-				for _, tx := range safeBlock.Transactions() {
-					switch tx.Type() {
-					case types.AccessListTxType:
-					case types.DynamicFeeTxType:
-						signer := types.MakeSigner(api.eth.BlockChain().Config(), block.Number())
-						from, _ := types.Sender(signer, tx)
-						addr = append(addr, from)
-						amt := GetFeeRateByBlockHeight(safeBlock.NumberU64(), tx.Size(), payloadAttributes.BTCBatchInfo.BTCFeeRate)
-						amounts = append(amounts, amt)
-						txIDs = append(txIDs, tx.Hash().String())
-						size = append(size, tx.Size())
-						log.Info("Deduct final fee", "account", from.String(), "amount", amt, "txID", tx.Hash().String())
-					case types.LegacyTxType:
-					case types.DepositTxType:
-					}
-				}
-				if len(addr) > 0 {
-					err := module.CommitBalance(txIDs, amounts, payloadAttributes.BTCBatchInfo)
-					if err != nil {
-						fmt.Println("=========================== DeductBalance err", err)
+			if safeBlock.NumberU64() > 0 {
+				if _, ok := deductRequestCache.Get("final" + safeBlock.Hash().String()); !ok {
+					if payloadAttributes.BTCBatchInfo.BTCTxId == "" {
+						log.Error("BTCTxId is empty")
 						return engine.STATUS_SYNCING, nil
 					}
+					addr := []common.Address{}
+					amounts := []uint64{}
+					txIDs := []string{}
+					size := []uint64{}
+
+					for _, tx := range safeBlock.Transactions() {
+						switch tx.Type() {
+						case types.AccessListTxType:
+						case types.DynamicFeeTxType:
+							signer := types.MakeSigner(api.eth.BlockChain().Config(), block.Number())
+							from, _ := types.Sender(signer, tx)
+							addr = append(addr, from)
+							amt := common.GetFeeRateByBlockHeight(safeBlock.NumberU64(), tx.Size(), payloadAttributes.BTCBatchInfo.BTCFeeRate)
+							amounts = append(amounts, amt)
+							txIDs = append(txIDs, tx.Hash().String())
+							size = append(size, tx.Size())
+							log.Info("Deduct final fee", "account", from.String(), "amount", amt, "txID", tx.Hash().String())
+						case types.LegacyTxType:
+						case types.DepositTxType:
+						}
+					}
+					if len(addr) > 0 {
+						err := module.CommitBalance(txIDs, amounts, payloadAttributes.BTCBatchInfo)
+						if err != nil {
+							fmt.Println("=========================== DeductBalance err", err)
+							return engine.STATUS_SYNCING, nil
+						}
+					}
+					deductRequestCache.Add("final"+safeBlock.Hash().String(), true)
 				}
-				deductRequestCache.Add("final"+safeBlock.Hash().String(), true)
 			}
 
 			if _, ok := deductRequestCache.Get("estimate" + block.Hash().String()); !ok {
@@ -402,7 +393,7 @@ func (api *ConsensusAPI) forkchoiceUpdated(update engine.ForkchoiceStateV1, payl
 						from, _ := types.Sender(signer, tx)
 						addr = append(addr, from)
 						size = append(size, tx.Size())
-						amt := GetFeeRateByBlockHeight(safeBlock.NumberU64(), tx.Size(), -1)
+						amt := common.GetFeeRateByBlockHeight(safeBlock.NumberU64(), tx.Size(), -1)
 						amounts = append(amounts, amt)
 						txIDs = append(txIDs, tx.Hash().String())
 						log.Info("Deduct estimate fee", "account", from.String(), "amount", amt, "txID", tx.Hash().String())

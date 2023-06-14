@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/bitcoinbalance"
-	"github.com/ethereum/go-ethereum/eth/catalyst"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -1081,7 +1080,7 @@ func checkEnoughBtc(blockNumber uint64, balanceMap map[string]int64, txs []*type
 			notPass[from] = append(notPass[from], tx)
 			continue
 		}
-		fee := catalyst.GetFeeRateByBlockHeight(blockNumber, tx.Size(), -1)
+		fee := common.GetFeeRateByBlockHeight(blockNumber, tx.Size(), -1)
 		balance -= int64(fee)
 		//if fee is below 0
 		if balance < 0 {
